@@ -8,7 +8,7 @@
 
 ## HOW TO USE
 启动服务器:<br>
-`./server`
+`./server`<br>
 客户端发送文件:<br>
 `./client filename.png`
 
