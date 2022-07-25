@@ -12,15 +12,16 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <errno.h>
 #include "config.h"
-
-#define FILE_MAX_SIZE 327680
-
+#include "process.h"
 
 int main(int argc, char *argv[]){
 
-	char buffer[blockSize];
-	unsigned short img[FILE_MAX_SIZE] = {0};
+	unsigned char buffer[blockSize];
+	unsigned char img[FILE_MAX_SIZE] = {0};
+	receiveFile fileInfo;
+	initFileInfo(&fileInfo);
 
 	struct sockaddr_in server_addr, from;
 	bzero(&server_addr, sizeof(server_addr));  // 效果等同于memset(&server_addr, 0, sizeof(server_addr))
@@ -55,70 +56,74 @@ int main(int argc, char *argv[]){
 		printf("Bind Port Successfully. (Server).\n");
 	}
 
-	printf("Server running...waiting...\n");
+	printf("Server start running...waiting...\n");
+	
+	char fileName[FILE_NAME_LENGTH+1];	
+    int length = 0;
+    memset(buffer, 0, blockSize);
 
 	while(1){
-
-		char fileName[FILE_NAME_LENGTH];
-		time_t now = time(NULL);
-		long int name = (long int) now;
-		//sprintf(fileName, "%ld%s", name, FILE_EXTENSION);
-		
-		sprintf(fileName, "test.png");
-		FILE *fp = fopen(fileName, "wb");
-		if (fp == NULL)  {  
-     		printf("File:\t%s Can Not Open To Write!\n", fileName);  
-        	exit(1);  
-    	}
-    	
-    	int length = 0;
-    	memset(buffer, 0, blockSize);
     
-		bool writtenFlag = false;
-		bool receiveFlag = false;
-
 		while( length = recvfrom(server_socket, buffer, blockSize, 0, (struct sockaddr*)&from, &len))
 	    {  
     	   if (length < 0) { 
 				printf("waiting new data...\n");
-				receiveFlag = writtenFlag?true:false;
 				break;
 			}else {
-				printf("receive a package with length: %d\n", length);
+				if(fileInfo.startReceiveTime == 0){
+					fileInfo.startReceiveTime = time(NULL);
+				}
+				if(fileInfo.fileName == 0){
+					fileInfo.fileName = getFileID(buffer);
+				}
+				if(fileInfo.totalSize == 0){
+					fileInfo.totalSize = getFileSize(buffer);
+				}
+				if(fileInfo.totalBlocks == 0){
+					fileInfo.totalBlocks = fileInfo.totalSize / dataSize;
+					if(fileInfo.totalSize % dataSize != 0){
+						fileInfo.totalBlocks += 1;
+					}
+				}
+				int blockID = getBlockNum(buffer);
+				printf("receive a package with ID: %d, Size: %d Bytes. \t", blockID, length);
+				long int tmpStart = blockID * dataSize;
+				
+				memcpy((fileInfo.content)+tmpStart, buffer+dataStart, length-headSize);
+				if(memcmp(fileInfo.content+tmpStart, buffer+dataStart, length-headSize)==0){
+				    printf("Verification passed\n");
+				} else {
+				    printf("Verification failed\n");
+				}
+				
+				fileInfo.gottenBlocks += 1;
+				printf("blockID:%d, dataSize: %d, gotten blocks:%d. \n", blockID, length, fileInfo.gottenBlocks);
+				if(fileInfo.gottenBlocks == fileInfo.totalBlocks){
+				    printf("Writing to file...\n");
+					//fileInfo.isCompleted = true;
+					sprintf(fileName, "%ld%s", fileInfo.fileName, FILE_EXTENSION);
+					FILE *fp = fopen(fileName, "wb");
+					if(fp == NULL) {
+						printf("Open file failed:%s\n", strerror(errno));
+						break;
+					}
+					fwrite(fileInfo.content, sizeof(char), fileInfo.totalSize, fp);
+					fclose(fp);
+					printf("Successfully get file: %s, fileSize: %ld\n", fileName, fileInfo.totalSize);
+					initFileInfo(&fileInfo);
+					bzero(fileName, sizeof(fileName));
+					break;
+				}
+				if(time(NULL)-fileInfo.startReceiveTime > MAX_INTERVAL){
+					printf("Time out. Give up receiving file:%ld%s\n",fileInfo.fileName, FILE_EXTENSION);
+					initFileInfo(&fileInfo);
+					bzero(fileName, sizeof(fileName));
+				}
+				bzero(buffer, blockSize);
 			}
-
-        	int write_length = fwrite(buffer, sizeof(char), length, fp); 
-			printf("Write %d bytes to file: %s\n", write_length, fileName);
-        	writtenFlag = true;
-
-        	if (write_length < length) {  
-            	writtenFlag = false;
-				printf("File: %s Write Failed!\n", fileName);  
-            	break;
-        	}  
         	bzero(buffer, blockSize); 
     	}
-    	if(receiveFlag) {
-    	    printf("Receive File:  %s\n", fileName);
-			fclose(fp);
-			return 0;
-		}
-    	fclose(fp);
-		
-		/*err = recvfrom(server_cocket, buffer, blockSize, 0, (struct sockaddr*)&from, sizeof(from));
-		if (err < 0) {
-			time_t now = time(NULL);
-			printf("**%s**  Failed to receive a UDP package.\n", ctime(&now));
-		} else {
-			char fileName[] = "test.png";
-			FILE *fp = fopen(fileName, "w");
-			if (fp == NULL)  {  
-     		   	printf("File:\t%s Can Not Open To Write!\n", fileName);  
-        		exit(1);  
-    		}
-		    // receive package and process
 
-		}*/
 	}
 	
 	close(server_socket);
